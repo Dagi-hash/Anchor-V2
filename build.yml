@@ -1,0 +1,71 @@
+name: Build Anchor APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the files
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Assemble the Capacitor project
+        run: |
+          set -e
+          B="$GITHUB_WORKSPACE/_build"
+          mkdir -p "$B/www"
+          cp index.html style.css app.js anchor.png mark.png "$B/www/"
+          cp package.json capacitor.config.json "$B/"
+          cd "$B"
+          npm install --no-audit --no-fund
+          npx cap add android
+
+      - name: Launcher icons
+        run: |
+          pip install pillow
+          python3 make_icons.py icon.png "_build/android/app/src/main/res"
+
+      - name: Android tweaks (keyboard, vibration, notifications, launch colour)
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE/_build/android/app/src/main"
+          grep -q windowSoftInputMode AndroidManifest.xml || sed -i 's|<activity|<activity android:windowSoftInputMode="adjustResize"|' AndroidManifest.xml
+          grep -q android.permission.VIBRATE AndroidManifest.xml || sed -i 's|</manifest>|    <uses-permission android:name="android.permission.VIBRATE" />\n</manifest>|' AndroidManifest.xml
+          for P in POST_NOTIFICATIONS SCHEDULE_EXACT_ALARM; do
+            grep -q "android.permission.$P" AndroidManifest.xml || sed -i "s|</manifest>|    <uses-permission android:name=\"android.permission.$P\" />\n</manifest>|" AndroidManifest.xml
+          done
+          sed -i 's|@drawable/splash|#000000|' res/values/styles.xml || true
+
+      - name: Sync web files into the app
+        run: |
+          cd "$GITHUB_WORKSPACE/_build"
+          npx cap sync android
+
+      - name: Build APK
+        run: |
+          cd "$GITHUB_WORKSPACE/_build/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Name the APK
+        run: cp "$GITHUB_WORKSPACE/_build/android/app/build/outputs/apk/debug/app-debug.apk" "$GITHUB_WORKSPACE/Anchor.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anchor-APK
+          path: Anchor.apk
